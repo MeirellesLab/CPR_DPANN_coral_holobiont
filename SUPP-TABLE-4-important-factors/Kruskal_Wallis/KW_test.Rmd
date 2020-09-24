@@ -1,0 +1,182 @@
+---
+title: "Holobiont project KW"
+author: "Arthur & Leticia"
+date: "12/10/2019"
+output: rmarkdown::github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Kruskal-Wallis Univariate test
+## Libraries we used
+```{r libraries, warning=FALSE,message=FALSE}
+library(janitor)
+library(tidyverse)
+library(gridExtra)
+library(Matrix)
+library(broom)
+```
+
+## Importing and tidying the data
+```{r reading data}
+data <- read.csv("Kruskal_Wallis/input/detailed_abundance_phyla_157_corais_matrix_porcentagem_prot_divided_17abr2020.csv",
+                 check.names = FALSE) %>% 
+  select(-1)
+
+levels(data$health_status)[levels(data$health_status) == "iminent bleaching"] <- "bleached"
+levels(data$health_status)[levels(data$health_status) == "signs of bleaching"] <- "bleached"
+levels(data$health_status)[levels(data$health_status) == "bleaching event"] <- "bleached" 
+levels(data$health_status)[levels(data$health_status) == "bleaching event "] <- "bleached"
+levels(data$health_status)[levels(data$health_status) == "Cyanobacterial patches"] <- "Black Band Disease"
+
+
+data_num <- data %>% select_if(is.numeric)
+
+abundantes <- data_num %>% gather() %>% group_by(key) %>% 
+  summarise(mean_abund = mean(value)) %>% 
+  filter(mean_abund > 1/100) %>% pull(key)
+
+
+data <- data %>% 
+  mutate(
+    seq_method = factor(
+      case_when(
+        .$seq_method %in% c("Illumina Genome Analyzer IIx", "Illumina HiSeq 1000",
+                            "Illumina HiSeq 1000 WGS", "Illumina HiSeq 2000",
+                            "Illumina HiSeq 2500", "Illumina HiSeq 2500 WGS",
+                            "WGS illumina") ~ "Illumina",
+        TRUE ~ "454"
+      )
+    )
+  )
+
+data <- data %>% filter(genus != "Fungia",
+                        genus != "Pseudodiploria", 
+                        !(.$genus == "Porites" & .$authors == "Thurber et al. 2009"),
+                        !(.$genus == "Acropora" & .$region == "mesocosmos" & .$authors == "not published"),
+                        !(.$genus == "Pocillopora" & .$region == "mesocosmos" & .$authors =="not published"),
+                        !(.$genus == "Seriatopora" &.$region == "mesocosmos" & .$authors =="not published"),
+                        !(.$id == "mgm4694757_prinseq_good_Crf1")) %>% 
+  mutate(genus = factor(genus),
+         authors = factor(authors),
+         growth_form = factor(growth_form))
+
+data_num <- data %>% select_if(is.numeric)
+```
+
+# Kruskal-Wallis MuLtivariate function
+```{r mult_KW_function}
+multkw <- function(group,y,simplify=FALSE){
+  
+  ### sort data by group ###
+  o<-order(group)
+  group<-group[o]
+  y<-as.matrix(y[o,])
+  n<-length(group)
+  p<-dim(y)[2]
+  if (dim(y)[1] != n)
+    return("number of oberservations not equal to length of group")
+  
+  groupls<-unique(group)
+  g<-length(groupls) #number of groups#
+  groupind<-sapply(groupls,"==",group) #group indicator#
+  ni<-colSums(groupind) #num of subj of each group#
+  r<-apply(y,2,rank) #corresponding rank variable#
+  
+  ### calculation of statistic ###
+  r.ik<-t(groupind)%*%r*(1/ni) #gxp, mean rank of kth variate in ith
+  group#
+  m<- (n+1)/2 #expected value of rik#
+  u.ik<-t(r.ik-m)
+  U<-as.vector(u.ik)
+  V<-1/(n-1)*t(r-m)%*%(r-m) #pooled within-group cov matrix
+  Vstar<-bdiag(lapply(1/ni,"*",V))
+  W2<-as.numeric(t(U)%*%solve(Vstar)%*%U)
+  
+  ### return stat and p-value ###
+  returnlist<-list(statistic=W2,d.f.=p*(g-1),
+                   p.value=pchisq(W2,p*(g-1),lower.tail=F))
+  if (simplify==TRUE) return (W2)
+  else return (returnlist)
+}
+```
+
+## PCA
+
+```{r manual approach}
+data_scale <- scale(data_num, center = TRUE, scale = TRUE)
+data_cov <- cov(data_scale)
+det(data_cov)
+
+auto <- eigen(data_cov)
+sum(auto$values>1)
+
+var.exp <- cumsum(auto$values/sum(auto$values))
+sum(var.exp <= .9)
+
+PCs <- as.matrix(data_num) %*% matrix(auto$vectors[,1:33],nrow=159,ncol=33)
+```
+
+```{r MKW}
+mkw_aut <- multkw(y = PCs, group = data$authors)
+mkw_genus <- multkw(y = PCs, group = data$genus)
+mkw_health <- multkw(y = PCs, group = data$health_status)
+mkw_seq <- multkw(y = PCs, group = data$seq_method)
+mkw_GF <- multkw(y = PCs, group = data$growth_form)
+mkw_region <- multkw(y = PCs, group = data$region)
+
+mkw_geral <- bind_rows(mkw_aut, mkw_genus,
+                       mkw_health,mkw_seq,
+                       mkw_GF, mkw_region)
+
+mkw_geral$var <- c("authors", "genus", "health_status",
+                   "seq_method", "growth_form", "region")
+
+mkw_geral
+mkw_geral %>% write_csv("Kruskal_Wallis/outputs/table_mkw_geral.csv")
+
+```
+
+
+```{r individual test}
+pvalue <- matrix(0, nrow=ncol(PCs), ncol=length(2:8)) %>% as.data.frame()
+statistic <- pvalue
+d_f <- pvalue
+
+for(i in 1:ncol(PCs)){
+  
+  for(k in 2:8){
+    
+  le_test <- kruskal.test(PCs[, i] ~ data[, k])
+  
+  pvalue[i, k] <- le_test$p.value
+  statistic[i, k] <- le_test$statistic
+  d_f[i, k] <- le_test$parameter 
+  }
+  
+}
+
+df_kw_individual <- bind_cols(
+  pvalue,
+  statistic,
+  d_f,
+) %>% mutate(PC = paste0("PC_", 1:n())) %>% 
+  select(-c(V1, V11, V12))
+
+colnames(df_kw_individual) <- c(paste0("pvalue_", colnames(data)[2:8]),
+                                paste0(paste0("statistic_", colnames(data)[2:8])),
+                                paste0("degree_freedom_", colnames(data)[2:8]),
+                                "PC")
+
+result_kw <- df_kw_individual %>% select(contains("pvalue"), PC) %>% 
+  pivot_longer(-PC) %>% 
+  mutate(th_sig = value <= .05) %>% 
+  group_by(name) %>% count(th_sig) %>% 
+  mutate(prop = n/ncol(PCs)) %>% filter(th_sig == TRUE) %>% 
+  arrange(desc(prop)) 
+
+write_csv(x = result_kw, "Kruskal_Wallis/outputs/table_kw_univar.csv")
+
+```
