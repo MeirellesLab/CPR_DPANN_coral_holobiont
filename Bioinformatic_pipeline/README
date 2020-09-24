@@ -1,0 +1,16 @@
+USAGE INSTRUCTIONS: 
+
+.\taxon_profiling.sh
+
+This script was designed to process samples from NCBI (in the SRA format) and from the MGRAST database
+(fastq or fasta format, beginning with mgm + id). 
+The script runs all necessary steps for quality and
+uniformity filtering of samples (a shorter pipeline for MGRAST samples, but longer for SRA files), and
+executes taxonomic profiling using kraken2. 
+For SRA files, the script runs vdb-validate, fastq-dump, prinseq and kraken2. 
+For MGRAST files, the script checks the file format, and then runs prinseq and kraken2. 
+The script requires the file to be already downloaded. 
+Since it requires no internet connection, it can be readily submitted to a cluster partition for analysis. 
+This script requires you to have prinseq -lite (perl script without the .pl extension) and 
+kraken2 (script created when installing kraken2) on your bin folder, as executable. 
+It also requires that SRA Toolkit is downloaded and decompressed in your computer.
