@@ -1,7 +1,12 @@
 USAGE INSTRUCTIONS: 
 
-.\taxon_profiling.sh
+.\script_for_download_mg_rast_files.sh
+This script downloads Mg-rast files, from the IDs of array @mgm_list
 
+.\script_for_download_mg_rast_files.sh
+This script downloads SRA files, from the IDs of array @sra_list
+
+.\taxon_profiling.sh
 This script was designed to process samples from NCBI (in the SRA format) and from the MGRAST database
 (fastq or fasta format, beginning with mgm + id). 
 The script runs all necessary steps for quality and
