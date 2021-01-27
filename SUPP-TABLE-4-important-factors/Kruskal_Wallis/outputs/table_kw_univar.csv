@@ -1,8 +1,0 @@
-name,th_sig,n,prop
-pvalue_authors,TRUE,32,0.9696969696969697
-pvalue_growth_form,TRUE,32,0.9696969696969697
-pvalue_genus,TRUE,31,0.9393939393939394
-pvalue_region,TRUE,31,0.9393939393939394
-pvalue_species_host,TRUE,29,0.8787878787878788
-pvalue_health_status,TRUE,26,0.7878787878787878
-pvalue_seq_method,TRUE,23,0.696969696969697

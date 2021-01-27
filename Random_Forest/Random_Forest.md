@@ -1,0 +1,392 @@
+Holobiont project Random Forest
+================
+Arthur & Leticia
+12/10/2019
+
+# Random Forest Evaluation
+
+This document contains the code witcht performs the random Forest method
+with the objective to extract from the data:
+
+  - The individuals that are most important to classify the variables in
+    this study.  
+  - etc.
+
+You can find more about the method in the [Breiman’s
+paper](%22https://link.springer.com/article/10.1023/A:1010933404324%22)
+
+## Libraries we used
+
+``` r
+library(tidyverse)
+library(randomForest)
+library(scales)
+#library(cowplot)
+#library(extrafont)
+library(patchwork)
+```
+
+## Importing and tidying the data
+
+``` r
+data <- read.csv("input/detailed_abundance_phyla_157_corais_matrix_porcentagem_prot_divided_17abr2019.csv") %>%
+  select(-1)
+
+levels(data$health_status)[levels(data$health_status) == "iminent bleaching"] <- "bleached"
+levels(data$health_status)[levels(data$health_status) == "signs of bleaching"] <- "bleached"
+levels(data$health_status)[levels(data$health_status) == "bleaching event"] <- "bleached" 
+levels(data$health_status)[levels(data$health_status) == "bleaching event "] <- "bleached"
+levels(data$health_status)[levels(data$health_status) == "Cyanobacterial patches"] <- "Black Band Disease"
+
+data_num <- data %>% select_if(is.numeric)
+
+abundantes <- data_num %>% gather() %>% group_by(key) %>% 
+  summarise(mean_abun = mean(value)) %>% 
+  filter(mean_abun > 1/100) %>% pull(key)
+
+
+data <- data %>% 
+  mutate(
+    seq_method = factor(
+      case_when(
+        .$seq_method %in% c("Illumina Genome Analyzer IIx", "Illumina HiSeq 1000",
+                            "Illumina HiSeq 1000 WGS", "Illumina HiSeq 2000",
+                            "Illumina HiSeq 2500", "Illumina HiSeq 2500 WGS",
+                            "WGS illumina") ~ "Illumina",
+        TRUE ~ "454"
+      )
+    )
+  )
+
+data <- data %>% filter(genus != "Fungia",
+                        genus != "Pseudodiploria", 
+                        !(.$genus == "Porites" & .$authors == "Thurber et al. 2009"),
+                        !(.$genus == "Acropora" & .$region == "mesocosmos" & .$authors == "not published"),
+                        !(.$genus == "Pocillopora" & .$region == "mesocosmos" & .$authors =="not published"),
+                        !(.$genus == "Seriatopora" &.$region == "mesocosmos" & .$authors =="not published"),
+                        !(.$id == "mgm4694757_prinseq_good_Crf1")) %>% 
+  mutate(genus = factor(genus),
+         authors = factor(authors),
+         growth_form = factor(growth_form))
+```
+
+## Runinng the model
+
+``` r
+set.seed(2019)
+
+community_structure <- randomForest(importance = TRUE, ntree = 50000,
+                                    x = select(data, genus, seq_method, authors, region, growth_form,
+                                               health_status,             
+                                               Unclassified.class.in.Proteobacteria:Rhodothermaeota)
+                                    )
+genus_supervised <- randomForest(genus ~ .,
+                                 importance = TRUE, ntree = 50000,
+                                 select(data, genus, seq_method, authors, region, growth_form,
+                                        health_status,             
+                                        Unclassified.class.in.Proteobacteria:Rhodothermaeota)
+                                 )
+
+full_join(
+  community_structure %>% importance() %>% as.data.frame() %>% rownames_to_column(var = "variables") %>% 
+    select(MeanDecreaseAccuracy, MeanDecreaseGini,variables) %>% 
+    mutate(rf_type = "community_structure") %>% 
+    filter(variables != "genus") %>% 
+    rename(mda_community = MeanDecreaseAccuracy, mdg_community = MeanDecreaseGini),
+  genus_supervised %>% importance() %>% as.data.frame() %>% rownames_to_column(var = "variables") %>% 
+    select(MeanDecreaseAccuracy, MeanDecreaseGini,variables) %>% 
+    mutate(rf_type = "genus_supervised") %>% 
+    rename(mda_genus = MeanDecreaseAccuracy, mdg_genus = MeanDecreaseGini),
+  by = "variables"
+) %>% 
+  write_csv("outputs/random_forest/RF_impotance_per_variables.csv")
+```
+
+The RF csv output has a missing value at genus supervised importance in
+the genus varibles because genus is the predicted classification
+variable.
+
+## Tidying the results output
+
+``` r
+plot_1_community_genus <- left_join(
+  community_structure %>% importance() %>% as.data.frame() %>% rownames_to_column(var = "variables") %>% 
+    select(MeanDecreaseAccuracy, MeanDecreaseGini,variables) %>% 
+    mutate(rf_type = "community_structure") %>% 
+    filter(variables != "genus") %>% 
+    rename(mda_community = MeanDecreaseAccuracy, mdg_community = MeanDecreaseGini),
+  genus_supervised %>% importance() %>% as.data.frame() %>% rownames_to_column(var = "variables") %>% 
+    select(MeanDecreaseAccuracy, MeanDecreaseGini,variables) %>% 
+    mutate(rf_type = "genus_supervised") %>% 
+    rename(mda_genus = MeanDecreaseAccuracy, mdg_genus = MeanDecreaseGini, var_gen = variables),
+  by = c("variables" = "var_gen")
+) %>% 
+  mutate(point_color = factor(case_when(
+    .$variables %in% c("seq_method", "authors", "region", "growth_form", "health_status") ~ "Abiotic",
+    str_detect(.$variables, "Candidat")                                                   ~ "Candidatus",
+    str_detect(.$variables, "candidat")                                                   ~ "Candidatus",
+    TRUE                                                                                  ~ "Established"
+  ))) %>% 
+  mutate(variables = factor(
+    str_replace(.$variables, pattern = "\\.", replacement = " ") %>%
+      str_replace(pattern = "_", replacement = " "))) %>% 
+  mutate(variables = str_replace(variables, "Candidatus", "Ca."))
+```
+
+## Ploting results
+
+``` r
+rf_plot <- ggplot(plot_1_community_genus, aes(x = mda_genus, y = mda_community, colour = point_color))+
+  #geom_abline(slope = 1, intercept = 0, alpha = 0.5, color = "gray85")+
+  geom_point(size = 2.5)+
+  ggrepel::geom_text_repel(data = filter(plot_1_community_genus,
+                           mda_community > 50 | mda_community < 5 | mda_genus > 50 | point_color == "Abiotic" | variables %in% c("Cyanobacteria", "Alphaproteobacteria", "Betaproteobacteria", "Gammaproteobacteria", "Bacterioidetes")),force = 6, family = "sans", show.legend = FALSE,
+             aes(x = mda_genus, y = mda_community, label = variables),
+             size = 4)+
+  labs(x = "Importance in separating coral genus",
+       y = "Importance in community structure",
+       colour = NULL)+
+  coord_equal() +
+  guides(colour = guide_legend(override.aes = list(size = 7.5))) +
+  scale_colour_manual(values = c("Abiotic" = "#d95f02", "Candidatus" = "#60A260",
+                                 "Established" = "#386CB0"))+
+  #expand_limits(
+  #  x = c(0, 73)
+  #)+ 
+  theme(axis.title.x = element_text(size=12, family = "sans"),
+        panel.grid.major = element_blank(),panel.background = element_blank(),
+        axis.line.y.left = element_line(), axis.line.x.bottom = element_line(),
+        panel.grid.minor = element_blank(),
+        legend.position = "bottom",
+        legend.text = element_text(size = 12, family = "sans"),
+        axis.text.y = element_text(size = 10, family = "sans"),
+        axis.text.x = element_text(size = 10, family = "sans"))+
+  theme(axis.title.y = element_text(size=12, family = "sans"),
+        #panel.grid.major.y = element_line(colour = "black")
+        )
+
+ggplot2::ggsave(plot = rf_plot, file="outputs/random_forest/Random_Forest_model_importance_community_and_genus.svg", width = 88, height = 45, units = "mm", scale = 4)
+```
+
+    ## Warning: ggrepel: 4 unlabeled data points (too many overlaps). Consider
+    ## increasing max.overlaps
+
+``` r
+ggplot2::ggsave(plot = rf_plot, file="outputs/random_forest/Random_Forest_model_importance_community_and_genus.png", width = 88, height = 88, units = "mm", scale = 2, dpi = 250)
+```
+
+    ## Warning: ggrepel: 8 unlabeled data points (too many overlaps). Consider
+    ## increasing max.overlaps
+
+``` r
+ggplot2::ggsave(plot = rf_plot, file="outputs/random_forest/Random_Forest_model_importance_community_and_genus.pdf", width = 88, height = 45, units = "mm", scale = 4)
+```
+
+    ## Warning: ggrepel: 2 unlabeled data points (too many overlaps). Consider
+    ## increasing max.overlaps
+
+``` r
+rf_plot
+```
+
+![](Random_Forest_files/figure-gfm/plot_result_rf-1.png)<!-- -->
+
+``` r
+abund_media <- data_num %>% gather() %>% group_by(key) %>% 
+  summarise(media = mean(value)) %>% 
+  rename(variables = key)
+write_csv(abund_media, "outputs/tables/mean_abun.csv")
+
+df_abund_imp <- plot_1_community_genus %>% 
+  filter(point_color != "Abiotic") %>% 
+  select(mda_community, point_color, variables) %>% 
+  arrange(variables) %>% 
+  bind_cols(abund_media) %>% 
+  mutate(variables = str_replace(variables...3, "Candidatus", "Ca."))
+  
+abund_comm <- df_abund_imp %>% 
+  ggplot(aes(x = media, y = mda_community))+
+  labs(x = "Average relative abundance (log10)",
+       y = "Importance in community structure",
+       colour = "Taxa")+
+  #geom_hline(
+  #  yintercept = df_abund_imp %>% mutate(rank_rel = rank(mda_community)) %>% 
+  #    filter(rank_rel == 159%/%2) %>% pull(mda_community),
+  #  linetype = 3
+  #) +
+  scale_x_log10(labels = trans_format("log10", math_format(10^.x)))+
+  #annotation_logticks(colour = "gray80",sides = "bottom")+
+  scale_colour_manual(values = c("Candidatus" = "#60A260",
+                                 "Established" = "#386CB0"))+
+  #guides(colour = "none") +
+  geom_point(aes(colour = point_color), size = 2.5)+
+  ggrepel::geom_text_repel(data = df_abund_imp %>% 
+                             filter(mda_community >= 50| media >= 0.05| variables %in% c("Cyanobacteria", "Alphaproteobacteria", "Betaproteobacteria", "Gammaproteobacteria", "Bacterioidetes") | mda_community < 5), force = 15, show.legend = FALSE,
+                           aes(colour = point_color, label = variables),
+                           size = 4, family = "sans")+
+  geom_vline(xintercept = .1/100, linetype = 3)+
+  expand_limits(
+    y = c(- 1, 90)
+  )+
+  theme(axis.title.x = element_text(size=12, family = "sans"),
+        panel.grid.major = element_blank(),panel.background = element_blank(),
+        axis.line.y.left = element_line(), axis.line.x.bottom = element_line(),
+        panel.grid.minor = element_blank(), axis.ticks.length.x.top = element_blank(),
+        legend.position = "bottom", legend.title = element_blank(),
+        legend.text = element_text(size = 12, family = "sans"),
+        axis.text.y = element_text(size = 10, family = "sans"),
+        axis.text.x = element_text(size = 10, family = "sans"))+
+  theme(axis.title.y = element_text(size=12, family = "sans"),
+        #panel.grid.major.y = element_line(colour = "black")
+        )
+
+ggplot2::ggsave(abund_comm, file = "outputs/random_forest/mean_abundance_imp_community.png", width = 160, height = 80, units = "mm", scale = 4)
+ggplot2::ggsave(abund_comm, file = "outputs/random_forest/mean_abundance_imp_community.pdf", width = 160, height = 80, units = "mm", scale = 4)
+ggplot2::ggsave(abund_comm, file = "outputs/random_forest/mean_abundance_imp_community.svg", width = 160, height = 80, units = "mm", scale = 4)
+abund_comm
+```
+
+![](Random_Forest_files/figure-gfm/plot_result_abundance-1.png)<!-- -->
+
+## C plot
+
+``` r
+plot_c_df <- plot_1_community_genus %>% 
+  filter(point_color != "Abiotic") %>% 
+  #select(mda_community, point_color, variables) %>% 
+  arrange(variables) %>% 
+  left_join(
+    abund_media %>% 
+      mutate(point_color = factor(case_when(
+    .$variables %in% c("seq_method", "authors", "region", "growth_form", "health_status") ~ "Abiotic",
+    str_detect(.$variables, "Candidat")                                                   ~ "Candidatus",
+    str_detect(.$variables, "candidat")                                                   ~ "Candidatus",
+    TRUE                                                                                  ~ "Established"
+  ))) %>% 
+  mutate(variables = factor(
+    str_replace(.$variables, pattern = "\\.", replacement = " ") %>%
+      str_replace(pattern = "_", replacement = " "))) %>% 
+  mutate(variables = str_replace(variables, "Candidatus", "Ca."))
+            ) 
+
+plot_c <- plot_c_df %>% 
+  ggplot(aes(x = media, y = mda_genus))+
+  labs(x = "Average relative abundance (log10)", 
+       y = "Importance in separating coral genus",
+       colour = "Taxa")+
+  scale_x_log10(labels = trans_format("log10", math_format(10^.x)))+
+  #annotation_logticks(colour = "gray80",sides = "bottom")+
+  scale_colour_manual(values = c("Candidatus" = "#60A260",
+                                 "Established" = "#386CB0"))+
+  guides(colour = "none") +
+  #geom_hline(
+  #  yintercept = plot_c_df %>% mutate(rank_rel = rank(mda_genus)) %>% 
+  #    filter(rank_rel == 159%/%2) %>% pull(mda_genus),
+  #  linetype = 3
+  #) +
+  geom_point(aes(colour = point_color), size = 2.5)+
+  ggrepel::geom_text_repel(data = plot_c_df %>% 
+                             filter(mda_genus >= 50| media >= 0.05| variables %in% c("Cyanobacteria", "Alphaproteobacteria", "Betaproteobacteria", "Gammaproteobacteria", "Bacterioidetes") | mda_genus < 5), force = 15,
+                           aes(colour = point_color, label = variables),
+                           size = 4, family = "sans")+
+  geom_vline(xintercept = .1/100, linetype = 3)+
+  expand_limits(
+    y = c(- 1, 90)
+  )+
+  theme(axis.title.x = element_text(size=12, family = "sans"),
+        panel.grid.major = element_blank(),panel.background = element_blank(),
+        axis.line.y.left = element_line(), axis.line.x.bottom = element_line(),
+        panel.grid.minor = element_blank(), axis.ticks.length.x.top = element_blank(),
+        legend.position = "bottom", legend.title = element_blank(),
+        legend.text = element_text(size = 12, family = "sans"),
+        axis.text.y = element_text(size = 10, family = "sans"),
+        axis.text.x = element_text(size = 10, family = "sans"))+
+  theme(axis.title.y = element_text(size = 12, family = "sans"),
+        #panel.grid.major.y = element_line(colour = "black")
+        )
+
+
+ggplot2::ggsave(filename = paste0("outputs/random_forest/B_and_C_",Sys.Date(),".png"), height = 160, width = 80, units = "mm", scale = 4)
+ggplot2::ggsave(filename = paste0("outputs/random_forest/B_and_C",Sys.Date(),".svg"), height = 160, width = 80, units = "mm", scale = 4)
+ggplot2::ggsave(filename = paste0("outputs/random_forest/B_and_C",Sys.Date(),".pdf"), height = 160, width = 80, units = "mm", scale = 4)
+```
+
+## Final Panel
+
+``` r
+rf_plot / (abund_comm | plot_c) + 
+  plot_annotation(tag_levels = "a", tag_prefix = "1") +
+  plot_layout(guides = 'collect', nrow = 2) & theme(legend.position = 'bottom')
+```
+
+    ## Warning: ggrepel: 9 unlabeled data points (too many overlaps). Consider
+    ## increasing max.overlaps
+
+    ## Warning: ggrepel: 18 unlabeled data points (too many overlaps). Consider
+    ## increasing max.overlaps
+
+    ## Warning: ggrepel: 1 unlabeled data points (too many overlaps). Consider
+    ## increasing max.overlaps
+
+![](Random_Forest_files/figure-gfm/Panel-1.png)<!-- -->
+
+``` r
+#plot_grid(rf_plot, abund_comm, plot_c, rel_widths = c(1,.5,.5), ncol = 1, 
+#          #align = "h",
+#          nrow = 2,labels = c("A", "B"),label_x = c(0,-0.01))
+
+ggplot2::ggsave(filename = paste0("outputs/random_forest/rf_panel_",Sys.Date(),".png"), width = 160, height = 80, units = "mm", scale = 4)
+```
+
+    ## Warning: ggrepel: 9 unlabeled data points (too many overlaps). Consider
+    ## increasing max.overlaps
+
+    ## Warning: ggrepel: 18 unlabeled data points (too many overlaps). Consider
+    ## increasing max.overlaps
+
+    ## Warning: ggrepel: 2 unlabeled data points (too many overlaps). Consider
+    ## increasing max.overlaps
+
+``` r
+ggplot2::ggsave(filename = paste0("outputs/random_forest/rf_panel_",Sys.Date(),".svg"), width = 160, height = 80, units = "mm", scale = 4)
+```
+
+    ## Warning: ggrepel: 9 unlabeled data points (too many overlaps). Consider
+    ## increasing max.overlaps
+
+    ## Warning: ggrepel: 18 unlabeled data points (too many overlaps). Consider
+    ## increasing max.overlaps
+
+    ## Warning: ggrepel: 2 unlabeled data points (too many overlaps). Consider
+    ## increasing max.overlaps
+
+``` r
+ggplot2::ggsave(filename = paste0("outputs/random_forest/rf_panel_",Sys.Date(),".pdf"), width = 160, height = 80, units = "mm", scale = 4)
+```
+
+    ## Warning: ggrepel: 8 unlabeled data points (too many overlaps). Consider
+    ## increasing max.overlaps
+
+    ## Warning: ggrepel: 17 unlabeled data points (too many overlaps). Consider
+    ## increasing max.overlaps
+
+    ## Warning: ggrepel: 1 unlabeled data points (too many overlaps). Consider
+    ## increasing max.overlaps
+
+``` r
+fig_2 <- abund_comm + plot_c +
+  plot_annotation(tag_levels = "A") +
+  plot_layout(guides = 'collect', nrow = 1) & theme(legend.position = 'bottom', legend.box.background = element_blank())
+
+ggplot2::ggsave(plot = fig_2, file="outputs/random_forest/importance_community_and_genus_abund.png", width = 180, height = 90, units = "mm", scale = 2, dpi = 250)
+```
+
+    ## Warning: ggrepel: 6 unlabeled data points (too many overlaps). Consider
+    ## increasing max.overlaps
+
+``` r
+ggplot2::ggsave(plot = fig_2, file="outputs/random_forest/importance_community_and_genus_abund.svg", width = 180, height = 90, units = "mm", scale = 2, dpi = 250)
+```
+
+    ## Warning: ggrepel: 8 unlabeled data points (too many overlaps). Consider
+    ## increasing max.overlaps
