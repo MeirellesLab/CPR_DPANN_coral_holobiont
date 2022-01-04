@@ -21,11 +21,11 @@ library(svglite)
 
 ```{r load}
 # sample coordenates - must contain sample ID, latitude, logitude in this order
-geral <-read.csv("map_coordenades_coral_metagenome_6mai2019.csv", sep=",", header=TRUE)
+geral <-read.csv("input/map_coordenades_coral_metagenome_6mai2019.csv", sep=",", header=TRUE)
 
 # adding growth form info desse novo arquivo
-data <- read.csv("refined_detailed_abundance_phyla_157_corais_matrix_porcentagem_prot_divided_17abr2020.csv", 
-                 check.names=FALSE)
+data <- read.csv("input/refined_detailed_abundance_phyla_130_corais_matrix_porcentagem_prot_divided_17abr2019.csv", check.names=FALSE)
+
 data <- data.frame(data, check.names=FALSE)
 
 geral_gf <- cbind(geral, gf = data$growth_form)
@@ -38,7 +38,7 @@ data_prep <- data.frame(geral_gf) %>%
 genus_ord <- data_prep %>% pull(genus) %>% as.character() %>% unique()
 ```
 
-## PLotting figure and saving
+## Plotting figure and saving
 
 ```{r}
 # creating map layer
